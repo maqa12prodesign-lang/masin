@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Mobil Uyumlu Sonsuz Yarış Oyunu</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- GLTFLoader ekliyoruz -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            text-align: center;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+        #lobby-controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            pointer-events: all;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 10px 0;
+        }
+        .car-selection-button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 1em;
+            cursor: pointer;
+            background-color: rgba(76, 175, 80, 0.8);
+            color: white;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+        .car-selection-button.selected {
+            border: 3px solid #FFD700;
+            background-color: #2196F3;
+            transform: scale(1.05);
+        }
+        #startGameButton {
+            margin-top: 15px;
+            padding: 15px 40px;
+            font-size: 1.5em;
+            background-color: rgba(0, 123, 255, 0.9);
+            display: none;
+            border: none;
+            border-radius: 10px;
+        }
+        #score-display {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 5px;
+            font-size: 1.5em;
+            display: none;
+        }
+        #game-controls {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            display: none;
+            justify-content: space-between;
+            padding: 10px;
+            box-sizing: border-box;
+            z-index: 20;
+            pointer-events: all; 
+        }
+        .control-button {
+            width: 80px;
+            height: 80px;
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 2em;
+            border: none;
+            border-radius: 50%;
+            opacity: 0.9;
+            user-select: none;
+            touch-action: manipulation;
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 100;
+            display: none;
+        }
+        .car-name {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-top: 5px;
+            color: #FFD700;
+        }
+        /* Mobil Dikey Ekran Optimizasyonu */
+        @media (orientation: portrait) {
+            .control-button {
+                width: 70px;
+                height: 70px;
+            }
+            .car-selection-button {
+                padding: 8px 15px;
+                font-size: 0.9em;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+    
+    <div class="loading-overlay" id="loadingOverlay">
+        <div id="loadingText">🚗 Araba Modelleri Yükleniyor...</div>
+        <div id="loadingProgress" style="margin-top: 10px; color: #4CAF50; font-size: 1.1em;"></div>
+        <div id="loadingDetails" style="margin-top: 5px; font-size: 0.9em; color: #aaa;"></div>
+    </div>
+
+    <div id="ui-container">
+        <div id="score-display">Puan: <span id="current-score">0</span></div>
+        
+        <div id="lobby-controls">
+            <h2>🏁 Arabanı Seç ve Yarışa Başla!</h2>
+            <div id="car-selection-buttons">
+                <button class="car-selection-button" data-car="sedan">
+                    <div>🚘 Sedan</div>
+                    <div class="car-name">Modern Sedan</div>
+                </button>
+                <button class="car-selection-button" data-car="hornet">
+                    <div>🏎️ Spor Araba</div>
+                    <div class="car-name">Classic Car</div>
+                </button>
+                <button class="car-selection-button" data-car="garbage">
+                    <div>🚛 Kamyonet</div>
+                    <div class="car-name">Garbage Truck</div>
+                </button>
+            </div>
+            <button id="startGameButton">🏁 OYUNA BAŞLA</button>
+        </div>
+    </div>
+
+    <div id="game-controls">
+        <button id="moveLeft" class="control-button">«</button>
+        <button id="moveRight" class="control-button">»</button>
+    </div>
+
+    <script>
+        // *** Three.js Temel Değişkenler ***
+        let scene, camera, renderer;
+        let selectedCarType = 'sedan'; 
+        let carMesh; // GLB modelimiz burada olacak
+        let gameActive = false;
+        let score = 0;
+        
+        // GLTF Loader
+        const gltfLoader = new THREE.GLTFLoader();
+        
+        // Araba modelleri cache
+        const carModelsCache = {
+            sedan: null,
+            hornet: null,
+            garbage: null
+        };
+        
+        // Model bounding box'ları (ölçüleri tutmak için)
+        const carBoundingBoxes = {
+            sedan: null,
+            hornet: null,
+            garbage: null
+        };
+        
+        // Yükleme durumu
+        let modelsLoaded = false;
+        let modelsLoading = 0;
+        let modelsTotal = 0;
+
+        // Oyun Mekaniği Değişkenleri
+        let obstacles = [];
+        const LANES = [-2.5, 0, 2.5]; 
+        let currentLaneIndex = 1; 
+        let targetCarX = LANES[currentLaneIndex]; 
+        
+        let CAR_SPEED = 0.5; 
+        const ANIMATION_SMOOTHNESS = 0.15; 
+
+        // *** GÜNCELLENMİŞ ARABA MODELLERİ - ÖLÇÜLER DÜZELTİLDİ ***
+        const CAR_MODELS = {
+            sedan: { 
+                modelPath: 'models/Sedan.glb',
+                // YENİ: Otomatik boyutlandırma için scaleFactor eklendi
+                scaleFactor: 2.0, // Otomatik hesaplanacak
+                offsetY: 0, // SIFIRLANDI - artık batmayacak
+                offsetZ: 0,
+                speed: 0.5,
+                rotationY: 0,
+                acceleration: 1.0,
+                handling: 1.0,
+                description: "Dengeli ve güvenli sedan"
+            },
+            hornet: { 
+                modelPath: 'models/voxel_classic_car.glb',
+                // Bu model küçük olabilir, scale artırıldı
+                scaleFactor: 2.0, // 2x büyüt
+                offsetY: 0, // SIFIRLANDI
+                offsetZ: 0,
+                speed: 0.7,
+                rotationY: Math.PI,
+                acceleration: 1.3,
+                handling: 0.8,
+                description: "Hızlı ve çevik klasik spor"
+            },
+            garbage: { 
+                modelPath: 'models/garbage_track.glb',
+                // Bu model büyük olabilir, scale azaltıldı
+                scaleFactor: 2.0, // Yarıya küçült
+                offsetY: 0, // SIFIRLANDI
+                offsetZ: 0,
+                speed: 0.4,
+                rotationY: Math.PI,
+                acceleration: 0.7,
+                handling: 1.2,
+                description: "Güçlü ama yavaş kamyonet"
+            }
+        };
+        
+        // Yol ve Çevre Değişkenleri
+        let roadObjects = [];
+        const ROAD_WIDTH = 7.5;
+        const ROAD_COLOR = 0x3a3a3a; 
+
+        // *** MODEL YÜKLEME FONKSİYONU - GÜNCELLENDİ ***
+        function loadAllCarModels() {
+            document.getElementById('loadingOverlay').style.display = 'block';
+            modelsTotal = Object.keys(CAR_MODELS).length;
+            modelsLoading = modelsTotal;
+            
+            Object.keys(CAR_MODELS).forEach(carType => {
+                const modelInfo = CAR_MODELS[carType];
+                const carName = getCarDisplayName(carType);
+                
+                document.getElementById('loadingDetails').textContent = 
+                    `Yükleniyor: ${carName}...`;
+                
+                gltfLoader.load(
+                    modelInfo.modelPath,
+                    (gltf) => {
+                        // Modelin bounding box'ını hesapla
+                        const bbox = new THREE.Box3().setFromObject(gltf.scene);
+                        const size = new THREE.Vector3();
+                        bbox.getSize(size);
+                        
+                        console.log(`${carType} boyutları:`, size);
+                        
+                        // Modeli uygun şekilde ölçeklendir
+                        const maxDimension = Math.max(size.x, size.y, size.z);
+                        const targetSize = 2.5; // Hedef boyut (yol genişliğine uygun)
+                        const autoScale = (targetSize / maxDimension) * modelInfo.scaleFactor;
+                        
+                        console.log(`${carType} autoScale: ${autoScale}`);
+                        
+                        // Modeli scale et
+                        gltf.scene.scale.set(autoScale, autoScale, autoScale);
+                        
+                        // Scale sonrası bounding box'ı tekrar hesapla
+                        bbox.setFromObject(gltf.scene);
+                        bbox.getSize(size);
+                        console.log(`${carType} scale sonrası boyut:`, size);
+                        
+                        // Modeli ve bounding box'ı cache'e kaydet
+                        carModelsCache[carType] = gltf.scene;
+                        carBoundingBoxes[carType] = bbox;
+                        
+                        modelsLoading--;
+                        
+                        // Yükleme ilerlemesini güncelle
+                        const loaded = modelsTotal - modelsLoading;
+                        const progress = (loaded / modelsTotal) * 100;
+                        document.getElementById('loadingProgress').textContent = 
+                            `${loaded}/${modelsTotal} (%${progress.toFixed(0)})`;
+                        
+                        document.getElementById('loadingDetails').textContent = 
+                            `✓ ${carName} yüklendi (${size.x.toFixed(1)}x${size.y.toFixed(1)}x${size.z.toFixed(1)})`;
+                        
+                        // Tüm modeller yüklendi mi kontrol et
+                        if (modelsLoading === 0) {
+                            modelsLoaded = true;
+                            setTimeout(() => {
+                                document.getElementById('loadingOverlay').style.display = 'none';
+                                console.log('Tüm araba modelleri yüklendi!');
+                                
+                                // İlk arabayı göster
+                                createCarMesh(selectedCarType);
+                                document.getElementById('startGameButton').style.display = 'block';
+                            }, 500);
+                        }
+                    },
+                    (progress) => {
+                        if (progress.lengthComputable) {
+                            const percent = (progress.loaded / progress.total * 100).toFixed(1);
+                            document.getElementById('loadingDetails').textContent = 
+                                `${carName}: %${percent}`;
+                        }
+                    },
+                    (error) => {
+                        console.error(`${carType} modeli yüklenemedi:`, error);
+                        modelsLoading--;
+                        
+                        // Model yüklenemediğinde basit bir araba oluştur
+                        const simpleCar = createSimpleCar(carType);
+                        carModelsCache[carType] = simpleCar;
+                        
+                        // Basit arabanın bounding box'ını hesapla
+                        const bbox = new THREE.Box3().setFromObject(simpleCar);
+                        carBoundingBoxes[carType] = bbox;
+                        
+                        document.getElementById('loadingDetails').textContent = 
+                            `⚠ ${carName} yüklenemedi, basit model kullanılıyor`;
+                        
+                        if (modelsLoading === 0) {
+                            modelsLoaded = true;
+                            setTimeout(() => {
+                                document.getElementById('loadingOverlay').style.display = 'none';
+                                createCarMesh(selectedCarType);
+                                document.getElementById('startGameButton').style.display = 'block';
+                            }, 500);
+                        }
+                    }
+                );
+            });
+        }
+        
+        function getCarDisplayName(carType) {
+            const names = {
+                sedan: "Sedan Araba",
+                hornet: "Classic Car",
+                garbage: "Garbage Truck"
+            };
+            return names[carType] || carType;
+        }
+
+        // *** GLB MODEL OLUŞTURMA FONKSİYONU - GÜNCELLENDİ ***
+        function createCarMesh(type) {
+            // Eski arabayı kaldır
+            if (carMesh && scene) {
+                scene.remove(carMesh);
+            }
+
+            const modelInfo = CAR_MODELS[type];
+            
+            // Cache'den modeli al veya basit araba oluştur
+            let carModel;
+            if (carModelsCache[type]) {
+                carModel = carModelsCache[type].clone(); // Clone yap ki orijinal model bozulmasın
+                
+                // Modeli doğru yükseklikte konumlandır
+                if (carBoundingBoxes[type]) {
+                    const bbox = carBoundingBoxes[type];
+                    const size = new THREE.Vector3();
+                    bbox.getSize(size);
+                    
+                    // Modeli yere oturt (en alttaki nokta y=0 olsun)
+                    const minY = bbox.min.y;
+                    carModel.position.y = -minY;
+                    
+                    console.log(`${type} yükseklik ayarı: minY=${minY.toFixed(2)}, y=${carModel.position.y.toFixed(2)}`);
+                }
+                
+                // Rotation ayarı (arabayı doğru yöne çevir)
+                carModel.rotation.y = modelInfo.rotationY;
+                
+                // Tüm child'ları traverse et ve optimize et
+                carModel.traverse((child) => {
+                    if (child.isMesh) {
+                        // Performans için
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        
+                        // Materyal ayarları
+                        if (child.material) {
+                            child.material.side = THREE.FrontSide;
+                            if (child.material.map) {
+                                child.material.needsUpdate = true;
+                            }
+                        }
+                    }
+                });
+                
+                console.log(`${type} modeli başarıyla oluşturuldu`);
+            } else {
+                // Model henüz yüklenmediyse basit araba oluştur
+                console.log(`${type} için basit model oluşturuluyor`);
+                carModel = createSimpleCar(type);
+            }
+            
+            // Ana grup oluştur
+            carMesh = new THREE.Group();
+            carMesh.add(carModel);
+            
+            // *** DÜZELTME: Tüm arabalar aynı Z pozisyonunda olsun ***
+            const carZPosition = gameActive ? 5 : 0;
+            
+            // Pozisyon ayarla (artık offsetY kullanmıyoruz, model kendi yüksekliğinde)
+            carMesh.position.set(
+                targetCarX, 
+                0, // Y ekseni 0 - model kendi yüksekliğini ayarladı
+                carZPosition
+            );
+            
+            // Sahneye ekle
+            if (scene) {
+                scene.add(carMesh);
+            }
+            
+            // Hızı güncelle
+            CAR_SPEED = modelInfo.speed;
+            
+            return carMesh;
+        }
+
+        // *** YEDEK: BASİT ARABA OLUŞTURMA - GÜNCELLENDİ ***
+        function createSimpleCar(type) {
+            const carGroup = new THREE.Group();
+            
+            // Renkleri tipe göre ayarla
+            let color, bodyWidth, bodyHeight, bodyDepth;
+            
+            switch(type) {
+                case 'hornet': 
+                    color = 0xFF4500; // Turuncu-kırmızı
+                    bodyWidth = 1.5; bodyHeight = 0.8; bodyDepth = 3.0;
+                    break;
+                case 'garbage': 
+                    color = 0x228B22; // Yeşil
+                    bodyWidth = 2.0; bodyHeight = 1.5; bodyDepth = 4.0;
+                    break;
+                default: // sedan
+                    color = 0x1E90FF; // Mavi
+                    bodyWidth = 1.8; bodyHeight = 0.7; bodyDepth = 3.5;
+            }
+            
+            const material = new THREE.MeshLambertMaterial({ color: color });
+            
+            // Gövde
+            const bodyGeometry = new THREE.BoxGeometry(bodyWidth, bodyHeight, bodyDepth);
+            const body = new THREE.Mesh(bodyGeometry, material);
+            body.position.y = bodyHeight / 2; // Gövde yere değsin
+            carGroup.add(body);
+            
+            // Tavan
+            const roofHeight = bodyHeight * 0.5;
+            const roofGeometry = new THREE.BoxGeometry(bodyWidth * 0.8, roofHeight, bodyDepth * 0.5);
+            const roof = new THREE.Mesh(roofGeometry, material);
+            roof.position.y = bodyHeight + roofHeight / 2;
+            roof.position.z = -bodyDepth * 0.1;
+            carGroup.add(roof);
+            
+            // Kamyonet için arka kasa
+            if (type === 'garbage') {
+                const cargoGeometry = new THREE.BoxGeometry(bodyWidth * 0.9, bodyHeight * 0.8, bodyDepth * 0.6);
+                const cargo = new THREE.Mesh(cargoGeometry, material);
+                cargo.position.y = bodyHeight * 0.9;
+                cargo.position.z = bodyDepth * 0.2;
+                carGroup.add(cargo);
+            }
+            
+            // Tekerlekler
+            const wheelMaterial = new THREE.MeshLambertMaterial({ color: 0x222222 });
+            const wheelRadius = type === 'garbage' ? 0.35 : 0.3;
+            const wheelThickness = type === 'garbage' ? 0.2 : 0.15;
+            const wheelGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelThickness, 12);
+            wheelGeometry.rotateX(Math.PI / 2);
+            
+            const wheelPositions = [
+                [bodyWidth/2 - 0.1, wheelRadius, bodyDepth/3],
+                [bodyWidth/2 - 0.1, wheelRadius, -bodyDepth/3],
+                [-bodyWidth/2 + 0.1, wheelRadius, bodyDepth/3],
+                [-bodyWidth/2 + 0.1, wheelRadius, -bodyDepth/3]
+            ];
+            
+            wheelPositions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+                wheel.position.set(pos[0], pos[1], pos[2]);
+                carGroup.add(wheel);
+            });
+            
+            return carGroup;
+        }
+
+        // Basit bir Engel (Koni) Oluşturma
+        function createObstacle(x, z) {
+            const size = Math.random() * 1 + 1.5; 
+            const geometry = new THREE.ConeGeometry(size / 3, size, 8);
+            const material = new THREE.MeshLambertMaterial({ color: 0xffa500 }); 
+            const obstacle = new THREE.Mesh(geometry, material);
+            
+            obstacle.position.set(x, size / 2, z);
+            obstacle.castShadow = true;
+            scene.add(obstacle);
+            obstacles.push(obstacle);
+        }
+        
+        // Yol ve Çevre Oluşturma
+        function createRoad() {
+            // Asfalt Zemin
+            const roadGeometry = new THREE.PlaneGeometry(ROAD_WIDTH * 2, 1000); 
+            const roadMaterial = new THREE.MeshLambertMaterial({ 
+                color: ROAD_COLOR,
+                side: THREE.DoubleSide
+            });
+            const road = new THREE.Mesh(roadGeometry, roadMaterial);
+            road.rotation.x = -Math.PI / 2;
+            road.position.z = -500; 
+            road.receiveShadow = true;
+            scene.add(road);
+            roadObjects.push(road);
+
+            // Çim Zemin
+            const grassGeometry = new THREE.PlaneGeometry(100, 1000);
+            const grassMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x38761d,
+                side: THREE.DoubleSide
+            });
+            const grass = new THREE.Mesh(grassGeometry, grassMaterial);
+            grass.rotation.x = -Math.PI / 2;
+            grass.position.z = -500;
+            grass.position.y = -0.1; 
+            grass.receiveShadow = true;
+            scene.add(grass);
+            roadObjects.push(grass);
+
+            // Yol Çizgileri
+            const lineGeometry = new THREE.BoxGeometry(0.1, 0.1, 5); 
+            const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+            for (let i = 0; i < 50; i++) {
+                const line = new THREE.Mesh(lineGeometry, lineMaterial);
+                line.position.set(0, 0.05, -i * 15); 
+                scene.add(line);
+                roadObjects.push(line);
+            }
+
+            // Basit Ağaçlar
+            const treeBaseGeometry = new THREE.CylinderGeometry(0.2, 0.2, 5, 8);
+            const treeBaseMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const treeTopGeometry = new THREE.ConeGeometry(1.5, 5, 8);
+            const treeTopMaterial = new THREE.MeshLambertMaterial({ color: 0x008000 });
+
+            for (let i = 0; i < 30; i++) {
+                const zPos = -i * 20;
+                const xPos = ROAD_WIDTH + 3;
+
+                // Sağ Ağaç
+                const treeBase1 = new THREE.Mesh(treeBaseGeometry, treeBaseMaterial);
+                treeBase1.position.set(xPos, 2.5, zPos);
+                treeBase1.castShadow = true;
+                scene.add(treeBase1);
+                roadObjects.push(treeBase1);
+
+                const treeTop1 = new THREE.Mesh(treeTopGeometry, treeTopMaterial);
+                treeTop1.position.set(xPos, 6.5, zPos);
+                treeTop1.castShadow = true;
+                scene.add(treeTop1);
+                roadObjects.push(treeTop1);
+                
+                // Sol Ağaç
+                const treeBase2 = new THREE.Mesh(treeBaseGeometry, treeBaseMaterial);
+                treeBase2.position.set(-xPos, 2.5, zPos);
+                treeBase2.castShadow = true;
+                scene.add(treeBase2);
+                roadObjects.push(treeBase2);
+
+                const treeTop2 = new THREE.Mesh(treeTopGeometry, treeTopMaterial);
+                treeTop2.position.set(-xPos, 6.5, zPos);
+                treeTop2.castShadow = true;
+                scene.add(treeTop2);
+                roadObjects.push(treeTop2);
+            }
+        }
+
+        // *** Başlangıç Fonksiyonu (Lobi için) - GÜNCELLENDİ ***
+        function initLobby() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222222); 
+            scene.fog = new THREE.Fog(0x222222, 10, 50);
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // Kamera yüksekliği artırıldı
+            camera.position.set(0, 5, 10);
+            
+            const canvas = document.getElementById('gameCanvas');
+            renderer = new THREE.WebGLRenderer({ 
+                canvas: canvas, 
+                antialias: true,
+                alpha: true
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+            // Işıklar geliştirildi
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            directionalLight.position.set(10, 15, 10);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 50;
+            scene.add(directionalLight);
+            
+            // Lobi Zemini - Yükseklik düzeltildi
+            const planeGeometry = new THREE.PlaneGeometry(30, 30);
+            const planeMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x222222,
+                side: THREE.DoubleSide
+            });
+            const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+            plane.rotation.x = -Math.PI / 2;
+            plane.position.y = -0.5; // Zemin biraz aşağıda
+            plane.receiveShadow = true;
+            scene.add(plane);
+            
+            // Tüm araba modellerini yükle
+            loadAllCarModels();
+            animateLobby();
+        }
+        
+        // *** Lobi Animasyon Döngüsü - GÜNCELLENDİ ***
+        function animateLobby() {
+            if (!gameActive) {
+                requestAnimationFrame(animateLobby);
+                
+                // Kamera lobi için daha iyi açı
+                if (carMesh) {
+                    const time = Date.now() * 0.0003; // Daha yavaş dönüş
+                    camera.position.x = Math.sin(time) * 12; // Daha uzak
+                    camera.position.z = Math.cos(time) * 12;
+                    camera.position.y = 6 + Math.sin(time * 1.5) * 1; // Daha yüksek
+                    camera.lookAt(0, 2, 0); // Ortaya bak
+                    
+                    // Arabayı hafifçe döndür
+                    carMesh.rotation.y += 0.005;
+                    
+                    // Arabayı zeminde tut
+                    if (carMesh.position.y < 0) {
+                        carMesh.position.y = 0;
+                    }
+                } else {
+                    camera.lookAt(0, 2, 0);
+                }
+
+                renderer.render(scene, camera);
+            }
+        }
+        
+        // *** Oyun Alanını Başlatma - GÜNCELLENDİ ***
+        function initGameScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x7ec0ee);
+            scene.fog = new THREE.Fog(0x7ec0ee, 5, 100);
+
+            // Işıklar
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+            const sunLight = new THREE.DirectionalLight(0xfdfd96, 1.5); 
+            sunLight.position.set(0, 25, 10); // Daha yüksek
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 2048;
+            sunLight.shadow.mapSize.height = 2048;
+            scene.add(sunLight);
+
+            // Yolu oluştur
+            createRoad();
+            
+            // Arabayı sahneye geri ekle ve pozisyonunu sabit ayarla
+            createCarMesh(selectedCarType);
+            if (carMesh) {
+                carMesh.position.z = 5;
+                carMesh.position.y = 0; // Yükseklik sıfır
+                carMesh.rotation.y = 0; // Oyun sırasında düz dursun
+            }
+            
+            // Kamera pozisyonunu oyuna uygun ayarla
+            camera.position.set(0, 8, 12); // Daha yüksek ve uzak
+            camera.lookAt(0, 2, 5);
+
+            // Kontrolleri göster
+            document.getElementById('score-display').style.display = 'block';
+            document.getElementById('game-controls').style.display = 'flex';
+        }
+        
+        // *** Çarpışma Kontrolü ***
+        function checkCollision() {
+            if (!carMesh) return;
+            
+            const carBox = new THREE.Box3().setFromObject(carMesh);
+            
+            for (let i = 0; i < obstacles.length; i++) {
+                const obstacle = obstacles[i];
+                
+                // Engelin Z ekseninde arabanın yakınında olup olmadığını kontrol et
+                if (obstacle.position.z > 3.5 && obstacle.position.z < 6.5) { 
+                    
+                    const obsBox = new THREE.Box3().setFromObject(obstacle);
+                    
+                    if (carBox.intersectsBox(obsBox)) {
+                        // Çarpışma efekti
+                        carMesh.position.y -= 0.2;
+                        
+                        // 0.5 saniye sonra oyunu bitir
+                        setTimeout(() => {
+                            gameActive = false;
+                            const finalScore = Math.floor(score / 10);
+                            alert(`💥 ÇARPIŞMA! Oyun Bitti.\n🏆 Puanınız: ${finalScore}\n🚗 Kullandığın Araba: ${getCarDisplayName(selectedCarType)}`);
+                            window.location.reload(); 
+                        }, 500);
+                        
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // *** Oyun Döngüsü ***
+        function animateGame() {
+            if (gameActive) {
+                requestAnimationFrame(animateGame);
+
+                // 1. Araba hareketini yumuşak geçişli yap
+                if (carMesh) {
+                    carMesh.position.x += (targetCarX - carMesh.position.x) * ANIMATION_SMOOTHNESS;
+                    
+                    // Arabayı zeminde tut
+                    if (carMesh.position.y < 0) {
+                        carMesh.position.y = 0;
+                    }
+                    
+                    // Hızlandıkça araba hafif sallansın
+                    if (CAR_SPEED > 0.6) {
+                        carMesh.rotation.z = Math.sin(Date.now() * 0.005) * 0.02;
+                    }
+                }
+
+                // 2. Engelleri ve yolu geriye hareket ettir
+                
+                // Engelleri hareket ettir
+                for (let i = 0; i < obstacles.length; i++) {
+                    const obstacle = obstacles[i];
+                    obstacle.position.z += CAR_SPEED;
+                    obstacle.rotation.y += 0.02; // Engel dönsün
+
+                    // Ekran dışına çıkan engeli sil
+                    if (obstacle.position.z > 15) {
+                        scene.remove(obstacle);
+                        obstacles.splice(i, 1);
+                        i--;
+                        score += 50; // Engel geçince ekstra puan
+                    }
+                }
+
+                // Yol objelerini hareket ettir ve tekrarla
+                roadObjects.forEach(obj => {
+                    if (obj.geometry.type === 'PlaneGeometry') return; 
+                    
+                    obj.position.z += CAR_SPEED;
+                    if (obj.position.z > 10) {
+                         obj.position.z -= 600; 
+                    }
+                });
+
+                // Rastgele engel yaratma (zamanla zorlaşsın)
+                const obstacleChance = 0.02 + (score / 200000);
+                if (Math.random() < obstacleChance) { 
+                     const randomLane = LANES[Math.floor(Math.random() * LANES.length)];
+                     createObstacle(randomLane, -150 - (score / 1000)); // Zamanla daha uzaktan gelsin
+                }
+                
+                // 3. Çarpışma kontrolü
+                checkCollision();
+                
+                // 4. Skoru güncelle (hıza göre artan puan)
+                score += 1 + (CAR_SPEED * 0.5);
+                document.getElementById('current-score').textContent = Math.floor(score / 10);
+                
+                renderer.render(scene, camera);
+            }
+        }
+
+        // *** Olay Dinleyicileri ***
+        
+        // Araba Seçimi
+        document.querySelectorAll('.car-selection-button').forEach(button => {
+            button.addEventListener('click', (e) => {
+                const carType = e.target.closest('.car-selection-button').getAttribute('data-car');
+                selectedCarType = carType;
+                
+                document.querySelectorAll('.car-selection-button').forEach(btn => btn.classList.remove('selected'));
+                e.target.closest('.car-selection-button').classList.add('selected');
+
+                if (modelsLoaded) {
+                    createCarMesh(selectedCarType);
+                }
+                document.getElementById('startGameButton').style.display = 'block';
+                
+                // Hızı güncelle
+                CAR_SPEED = CAR_MODELS[selectedCarType].speed;
+            });
+        });
+        
+        // Oyuna Başla
+        document.getElementById('startGameButton').addEventListener('click', () => {
+             if (selectedCarType && modelsLoaded) {
+                 document.getElementById('lobby-controls').style.display = 'none';
+                 document.getElementById('startGameButton').style.display = 'none';
+                 
+                 initGameScene();
+                 gameActive = true;
+                 animateGame(); 
+             } else {
+                 alert("Arabalar hala yükleniyor, lütfen bekleyin...");
+             }
+        });
+
+        // HAREKET EYLEMİ FONKSİYONLARI (Touch ve Mouse uyumlu)
+        function moveRightAction(e) {
+            e.preventDefault();
+            if (gameActive && currentLaneIndex < LANES.length - 1) {
+                currentLaneIndex++;
+                targetCarX = LANES[currentLaneIndex];
+                
+                // Hareket efekti
+                if (carMesh) {
+                    carMesh.rotation.y = 0.1;
+                    setTimeout(() => carMesh.rotation.y = 0, 200);
+                }
+            }
+        }
+
+        function moveLeftAction(e) {
+            e.preventDefault();
+            if (gameActive && currentLaneIndex > 0) {
+                currentLaneIndex--;
+                targetCarX = LANES[currentLaneIndex];
+                
+                // Hareket efekti
+                if (carMesh) {
+                    carMesh.rotation.y = -0.1;
+                    setTimeout(() => carMesh.rotation.y = 0, 200);
+                }
+            }
+        }
+
+        // Kontrol Olay Dinleyicileri
+        document.getElementById('moveRight').addEventListener('touchstart', moveRightAction);
+        document.getElementById('moveRight').addEventListener('mousedown', moveRightAction);
+        document.getElementById('moveLeft').addEventListener('touchstart', moveLeftAction);
+        document.getElementById('moveLeft').addEventListener('mousedown', moveLeftAction);
+
+        // Klavye Kontrolleri
+        document.addEventListener('keydown', (e) => {
+            if (gameActive) {
+                if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+                     moveRightAction(e); 
+                } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+                     moveLeftAction(e); 
+                }
+            }
+        });
+        
+        // Ekran Yeniden Boyutlandırma
+        window.addEventListener('resize', () => {
+             if(camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+             }
+        });
+        
+        // Sayfa yüklendiğinde Lobi'yi başlat
+        document.addEventListener('DOMContentLoaded', () => {
+             initLobby();
+             document.querySelector('.car-selection-button[data-car="sedan"]').classList.add('selected');
+        });
+
+    </script>
+</body>
+</html>
